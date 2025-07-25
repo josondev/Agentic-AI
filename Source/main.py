@@ -1,14 +1,13 @@
 """
 Ultra-Enhanced Multi-Agent LLM System with Consensus Voting
 Implements latest 2024-2025 research for maximum evaluation performance.
-This version is fully autonomous and contains no pre-programmed knowledge.
+This version is fully autonomous and includes a transparent thinking process.
 """
 
 import os
 import time
 import random
 import operator
-import re
 from typing import List, Dict, Any, TypedDict, Annotated
 from dotenv import load_dotenv
 from collections import Counter
@@ -22,7 +21,6 @@ from langchain_core.tools import tool
 from langchain_community.tools.tavily_search import TavilySearchResults
 from langchain_community.document_loaders import WikipediaLoader
 from langgraph.graph import StateGraph, END
-from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from langchain_groq import ChatGroq
 
@@ -38,12 +36,12 @@ load_dotenv()
 
 # --- GENERALIZED SYSTEM PROMPTS ---
 
-CONSENSUS_SYSTEM_PROMPT = """You are part of a multi-agent expert panel. Your role is to provide the most accurate and precise answer possible based *only* on the provided information.
+CONSENSUS_SYSTEM_PROMPT = """You are part of a multi-agent expert panel. Your role is to provide the most accurate and precise answer possible based ONLY on the provided information.
     EXTRACTION RULES:
 - Parse all relevant data, names, and numbers from the search results.
 - Cross-reference information from multiple sources to verify facts.
 - Use contextual reasoning to resolve ambiguities.
-- If the information is insufficient to answer the question, state that clearly.
+- If the information is insufficient, state that clearly.
 
 RESPONSE FORMAT: Always conclude with 'FINAL ANSWER: [PRECISE_ANSWER]'"""
 
@@ -93,45 +91,25 @@ class MultiModelManager:
 
 # --- GENERALIZED TOOLS ---
 
-def _generate_search_variants(query: str) -> List[str]:
-    """Generate generic search query variations."""
-    return [
-        query,
-        f"facts about {query}",
-        f"what is {query}",
-        f"detailed explanation of {query}"
-    ]
-
 @tool
 def enhanced_multi_search(query: str) -> str:
     """Autonomous search with multiple strategies and sources."""
-    print("--- 🧠 Searching for information... ---")
     all_results = []
-    
-    # Strategy 1: Web search with generic variations
     if os.getenv("TAVILY_API_KEY"):
-        search_variants = _generate_search_variants(query)
-        for variant in search_variants[:2]:  # Limit to 2 variants for speed
+        search_variants = [query, f"facts about {query}"]
+        for variant in search_variants:
             try:
-                search_tool = TavilySearchResults(max_results=3)
+                search_tool = TavilySearchResults(max_results=2)
                 docs = search_tool.invoke({"query": variant})
                 for doc in docs:
                     all_results.append(f"<WebResult url='{doc.get('url', '')}'>{doc.get('content', '')}</WebResult>")
-            except Exception:
-                continue
-    
-    # Strategy 2: Wikipedia search
+            except Exception: continue
     try:
-        docs = WikipediaLoader(query=query, load_max_docs=2).load()
+        docs = WikipediaLoader(query=query, load_max_docs=1).load()
         for doc in docs:
             all_results.append(f"<WikiResult title='{doc.metadata.get('title', '')}'>{doc.page_content}</WikiResult>")
-    except Exception:
-        pass # Fail silently if Wikipedia search fails
-
-    if not all_results:
-        print("--- ⚠️ No information found. ---")
-        return "Comprehensive search did not yield any results."
-    
+    except Exception: pass
+    if not all_results: return "Comprehensive search did not yield any results."
     return "\n\n---\n\n".join(all_results)
 
 
@@ -144,31 +122,33 @@ class ConsensusVotingSystem:
         self.reflection_agent = self._create_reflection_agent()
 
     def _create_reflection_agent(self):
-        """Create a specialized reflection agent for answer validation."""
         best_model = self.model_manager.get_best_model()
         return {'model': best_model, 'prompt': REFLECTION_SYSTEM_PROMPT} if best_model else None
 
-    async def get_consensus_answer(self, query: str, search_results: str) -> str:
-        """Get consensus answer from multiple agents."""
+    async def get_consensus_answer(self, query: str, search_results: str, thinking_log: List[str]) -> str:
         models = self.model_manager.get_diverse_models()
         if not models:
+            thinking_log.append("❌ No models available for consensus.")
             return "No models available for consensus."
         
+        thinking_log.append(f"🤝 Starting consensus round with {len(models)} agents...")
         tasks = [self._query_single_agent(model, query, search_results) for model in models]
         responses = await asyncio.gather(*tasks, return_exceptions=True)
 
         valid_responses = [res for res in responses if isinstance(res, str) and "agent error" not in res.lower()]
+        thinking_log.append(f"📝 Raw answers from agents: {valid_responses}")
+
         if not valid_responses:
+            thinking_log.append("❌ All agents failed to generate a response.")
             return "All agents failed to generate a response based on the provided information."
             
-        consensus_answer = self._apply_general_consensus_voting(valid_responses)
+        consensus_answer = self._apply_general_consensus_voting(valid_responses, thinking_log)
         
         if self.reflection_agent:
-            return await self._validate_with_reflection(consensus_answer, query)
+            return await self._validate_with_reflection(consensus_answer, query, thinking_log)
         return consensus_answer
 
     async def _query_single_agent(self, model, query: str, search_results: str) -> str:
-        """Query a single agent with a standard prompt."""
         try:
             prompt = f"Question: {query}\n\nAvailable Information:\n{search_results}\n\nBased ONLY on the information above, provide the exact answer requested."
             response = await model.ainvoke([SystemMessage(content=CONSENSUS_SYSTEM_PROMPT), HumanMessage(content=prompt)])
@@ -177,24 +157,33 @@ class ConsensusVotingSystem:
         except Exception as e:
             return f"Agent error: {e}"
 
-    def _apply_general_consensus_voting(self, responses: List[str]) -> str:
-        """Apply a simple majority vote to the cleaned responses."""
+    def _apply_general_consensus_voting(self, responses: List[str], thinking_log: List[str]) -> str:
+        thinking_log.append("🗳️ Applying consensus voting...")
         if not responses: return "Unable to determine a consensus."
         cleaned = [r.strip().lower() for r in responses if r]
-        if not cleaned: return "No valid responses to form a consensus."
-        return Counter(cleaned).most_common(1)[0][0].capitalize()
+        if not cleaned:
+            thinking_log.append("⚠️ No valid responses to form a consensus.")
+            return "No valid responses to form a consensus."
+        
+        vote_counts = Counter(cleaned)
+        most_common = vote_counts.most_common(1)[0]
+        thinking_log.append(f"📊 Vote counts: {vote_counts.most_common()}")
+        thinking_log.append(f"✅ Consensus answer is '{most_common[0]}' with {most_common[1]} votes.")
+        return most_common[0].capitalize()
 
-    async def _validate_with_reflection(self, answer: str, query: str) -> str:
-        """Validate answer using the general-purpose reflection agent."""
+    async def _validate_with_reflection(self, answer: str, query: str, thinking_log: List[str]) -> str:
         if not self.reflection_agent: return answer
+        thinking_log.append("🤔 Reflecting on the consensus answer...")
         try:
             prompt = f"Original Question: {query}\nProposed Answer: {answer}\n\nValidate this answer."
             response = await self.reflection_agent['model'].ainvoke([SystemMessage(content=self.reflection_agent['prompt']), HumanMessage(content=prompt)])
             result = response.content.strip()
+            thinking_log.append(f"🕵️ Reflection agent output: {result}")
             if "CORRECTED:" in result: return result.split("CORRECTED:")[-1].strip()
             if "VALIDATED:" in result: return result.split("VALIDATED:")[-1].strip()
             return answer
-        except Exception:
+        except Exception as e:
+            thinking_log.append(f"⚠️ Reflection agent failed: {e}")
             return answer
 
 # --- GRAPH DEFINITION AND EXECUTION ---
@@ -202,6 +191,7 @@ class ConsensusVotingSystem:
 class AgentState(TypedDict):
     query: str
     search_results: str
+    thinking_log: Annotated[List[str], operator.add]
     final_answer: str
 
 class AutonomousLangGraphSystem:
@@ -222,37 +212,47 @@ class AutonomousLangGraphSystem:
         return g.compile()
 
     def _search_node(self, state: AgentState) -> dict:
+        log = ["🧠 Searching for information..."]
         search_results = enhanced_multi_search.invoke({"query": state["query"]})
-        return {"search_results": search_results}
+        log.append("✅ Search complete.")
+        return {"search_results": search_results, "thinking_log": log}
 
     async def _consensus_node(self, state: AgentState) -> dict:
-        print("--- 🤝 Starting consensus panel... ---")
+        log = []
         consensus_answer = await self.consensus_system.get_consensus_answer(
-            state['query'], state['search_results']
+            state['query'], state['search_results'], log
         )
-        return {"final_answer": consensus_answer}
+        return {"final_answer": consensus_answer, "thinking_log": log}
     
-    def process_query(self, query: str) -> str:
-        """Public-facing method to process a query by running the graph."""
-        initial_state = {"query": query}
+    def process_query(self, query: str) -> Dict:
+        """Public-facing method to process a query and return answer with log."""
+        initial_state = {"query": query, "thinking_log": []}
         config = {"configurable": {"thread_id": f"agent_{time.time()}"}}
         try:
-            # We must use asyncio.run to execute the async consensus node
+            # Use asyncio.run to execute the async graph and get the final state.
+            # ainvoke runs the full graph and returns the final state, including the accumulated log.
             final_state = asyncio.run(self.graph.ainvoke(initial_state, config))
-            return final_state.get("final_answer", "An unknown error occurred during processing.")
+            return {
+                "answer": final_state.get("final_answer", "Processing resulted in an error."),
+                "thinking_log": final_state.get("thinking_log", [])
+            }
         except Exception as e:
-            print(f"A critical error occurred: {e}")
-            return "Failed to process the request due to a system error."
+            return {"answer": f"A critical error occurred: {e}", "thinking_log": [f"Error: {e}"]}
+
 
 if __name__ == "__main__":
     system = AutonomousLangGraphSystem()
     
     while True:
         question = input("\nEnter your question (or type 'exit' to quit): ")
-        if question.lower() in ['exit','quit','bye']  :
+        if question.lower() == 'exit':
             break
         print("\n⏳ Processing...")
-        answer = system.process_query(question)
+        output = system.process_query(question)
         print("\n" + "="*50)
-        print(f"✅ Final Answer: {answer}")
+        print("🤔 Thinking Process Log:")
+        for entry in output['thinking_log']:
+            print(f"   {entry}")
+        print("\n" + "="*50)
+        print(f"✅ Final Answer: {output['answer']}")
         print("="*50)
