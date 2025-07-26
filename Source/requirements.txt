@@ -1,33 +1,11 @@
-# Core dependencies
-gradio
-numpy
-pandas
-
-# LangChain ecosystem
+python-dotenv
 langchain
 langchain-core
 langchain-community
 langchain-groq
 langchain-together
-langgraph 
-
-# Open-source model support
-transformers
-torch
-accelerate
-
-# Local model serving
-ollama
-
-# Free search tools
-duckduckgo-search
-
-# Vector database and embeddings
-faiss-cpu
-sentence-transformers
-
-# Utilities
-python-dotenv
-requests
+langchain-ollama
+langgraph
+tavily-python
 wikipedia
-agno
+nest-asyncio
