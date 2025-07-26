@@ -1,3 +1,9 @@
+import nest_asyncio
+
+# Apply the patch before importing any other asyncio-related libraries.
+# This is the crucial fix for the FUNCTION_INVOCATION_FAILED error on Vercel.
+nest_asyncio.apply()
+
 from flask import Flask, request, jsonify
 from main import AutonomousLangGraphSystem
 import os
