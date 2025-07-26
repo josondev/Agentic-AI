@@ -46,7 +46,6 @@ The system follows a structured, graph-based workflow to process each query:
     Create a `requirements.txt` file with the following content:
     ```
     langchain
-    langgraph
     langchain-community
     langchain-groq
     langchain-ollama
