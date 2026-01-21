@@ -1,181 +1,523 @@
 """
-Agentic AI System - Streamlit Interface
-Multi-agent consensus system with beautiful UI
+Multi-Agent AI System - Streamlit Web Interface
+Updated with current Groq models (January 2025)
 """
 
-import streamlit as st
-import sys
 import os
-from pathlib import Path
+import time
+import random
+import operator
+from typing import List, Dict, Any, TypedDict, Annotated
+from collections import Counter
+import asyncio
+import nest_asyncio
+from dotenv import load_dotenv
+from datetime import datetime
 
-# Add current directory to path
-sys.path.insert(0, str(Path(__file__).parent))
+# Apply the patch
+nest_asyncio.apply()
 
-# Page config
+from langchain_core.tools import tool
+from langchain_community.tools.tavily_search import TavilySearchResults
+from langchain_community.document_loaders import WikipediaLoader
+from langgraph.graph import StateGraph, END
+from langchain_core.messages import SystemMessage, HumanMessage
+from langchain_groq import ChatGroq
+
+import streamlit as st
+
+load_dotenv()
+
+# --- PAGE CONFIG ---
 st.set_page_config(
-    page_title="Agentic AI System",
+    page_title="Multi-Agent AI System",
     page_icon="🤖",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS
+# --- CUSTOM CSS ---
 st.markdown("""
-    <style>
+<style>
     .main-header {
-        font-size: 3rem;
+        font-size: 2.5rem;
         font-weight: bold;
         text-align: center;
         background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
-        margin-bottom: 2rem;
+        padding: 1rem 0;
     }
-    .thinking-box {
+    .agent-card {
         background-color: #f0f2f6;
         padding: 1rem;
-        border-radius: 0.5rem;
-        border-left: 4px solid #667eea;
+        border-radius: 10px;
         margin: 0.5rem 0;
+        border-left: 4px solid #667eea;
+    }
+    .thinking-log {
+        background-color: #1e1e1e;
+        color: #00ff00;
+        padding: 1rem;
+        border-radius: 5px;
+        font-family: 'Courier New', monospace;
+        font-size: 0.9rem;
+        overflow-x: auto;
     }
     .answer-box {
-        background-color: #e8f5e9;
+        background-color: #e8f4f8;
         padding: 1.5rem;
-        border-radius: 0.5rem;
-        border-left: 4px solid #4caf50;
-        font-size: 1.2rem;
+        border-radius: 10px;
+        border-left: 5px solid #4CAF50;
         margin: 1rem 0;
     }
-    </style>
+    .stButton>button {
+        background-color: #667eea;
+        color: white;
+        border-radius: 5px;
+        padding: 0.5rem 2rem;
+        border: none;
+        font-weight: bold;
+    }
+    .stButton>button:hover {
+        background-color: #764ba2;
+    }
+</style>
 """, unsafe_allow_html=True)
 
-# Initialize system
-@st.cache_resource
-def initialize_system():
-    """Initialize the AI system once and cache it"""
-    try:
-        from main import AutonomousLangGraphSystem
-        return AutonomousLangGraphSystem()
-    except Exception as e:
-        st.error(f"Failed to initialize system: {e}")
-        return None
+# --- SYSTEM PROMPTS ---
 
-# Header
-st.markdown('<p class="main-header">🤖 Agentic AI System</p>', unsafe_allow_html=True)
-st.markdown("### Multi-Agent Consensus System with Transparent Thinking")
+CONSENSUS_SYSTEM_PROMPT = """You are part of a multi-agent expert panel. Your role is to provide the most accurate and precise answer possible based ONLY on the provided information.
+EXTRACTION RULES:
+- Parse all relevant data, names, and numbers from the search results.
+- Cross-reference information from multiple sources to verify facts.
+- Use contextual reasoning to resolve ambiguities.
+- If the information is insufficient, state that clearly.
 
-# Sidebar
-with st.sidebar:
-    st.header("ℹ️ About")
-    st.markdown("""
-    This system uses **multiple AI agents** that:
-    - 🔍 Search the web for information
-    - 🤝 Vote on the best answer
-    - 🧠 Reflect and validate results
-    
-    **Powered by:**
-    - 3x Groq AI Models
-    - Tavily Search
-    - Wikipedia
-    """)
-    
-    st.divider()
-    
-    st.header("🎯 How It Works")
-    st.markdown("""
-    1. **Search Phase**: Gather information from multiple sources
-    2. **Consensus Phase**: 3 AI agents analyze and vote
-    3. **Reflection Phase**: Validate and refine the answer
-    """)
-    
-    st.divider()
-    
-    st.header("📊 System Status")
-    system = initialize_system()
-    if system:
-        st.success(f"✅ System Ready")
-        st.info(f"🤖 {len(system.model_manager.models)} models active")
-    else:
-        st.error("❌ System Not Ready")
-    
-    st.divider()
-    
-    st.markdown("**Example Questions:**")
-    st.markdown("""
-    - What is quantum computing?
-    - Who won the 2024 Nobel Prize in Physics?
-    - Explain machine learning in simple terms
-    - What are the benefits of renewable energy?
-    """)
+RESPONSE FORMAT: Always conclude with 'FINAL ANSWER: [PRECISE_ANSWER]'"""
 
-# Main content area
-col1, col2 = st.columns([3, 1])
+REFLECTION_SYSTEM_PROMPT = """You are a reflection agent that validates answers from other agents.
+Your task is to review the proposed answer based on the original question and the provided context.
+1. Analyze the answer for relevance to the question.
+2. Check for logical consistency and factual accuracy.
+3. Verify the answer format is a direct and precise response.
+4. Identify any obvious errors, hallucinations, or inconsistencies.
 
-with col1:
-    # Query input
-    query = st.text_area(
-        "💬 Ask me anything:",
-        height=100,
-        placeholder="Type your question here... (e.g., 'What is artificial intelligence?')"
-    )
+Respond with 'VALIDATED: [answer]' if it is correct, or 'CORRECTED: [better_answer]' if you can provide a more accurate or concise answer based on the context."""
 
-with col2:
-    st.write("")  # Spacing
-    st.write("")  # Spacing
-    process_button = st.button("🚀 Process Query", type="primary", use_container_width=True)
-    clear_button = st.button("🗑️ Clear", use_container_width=True)
+# --- MODEL MANAGEMENT ---
 
-if clear_button:
-    st.rerun()
+class MultiModelManager:
+    """Manages multiple Groq LLM models with current supported models"""
+    def __init__(self):
+        self.models = {}
+        self._initialize_models()
 
-# Process query
-if process_button and query:
-    system = initialize_system()
-    
-    if not system:
-        st.error("❌ System is not initialized. Please check your API keys in Streamlit secrets.")
-        st.info("Set GROQ_API_KEY and TAVILY_API_KEY in Settings → Secrets")
-        st.stop()
-    
-    with st.spinner("🤔 Processing your query..."):
+    def _initialize_models(self):
+        """Initialize available Groq models - UPDATED FOR JANUARY 2025"""
+        groq_api_key = os.getenv("GROQ_API_KEY")
+        
+        if not groq_api_key:
+            raise RuntimeError("❌ GROQ_API_KEY not found in environment variables")
+        
         try:
-            result = system.process_query(query)
+            # PRODUCTION MODELS
+            self.models['llama3.3_70b'] = ChatGroq(
+                model="llama-3.3-70b-versatile",
+                temperature=0.1,
+                api_key=groq_api_key
+            )
             
-            # Display answer
-            st.markdown("---")
-            st.markdown("### 💡 Answer")
-            st.markdown(f'<div class="answer-box">{result["answer"]}</div>', unsafe_allow_html=True)
+            self.models['llama3.1_8b'] = ChatGroq(
+                model="llama-3.1-8b-instant",
+                temperature=0.1,
+                api_key=groq_api_key
+            )
             
-            # Display thinking process
-            st.markdown("---")
-            st.markdown("### 🧠 Thinking Process")
+            self.models['gpt-oss'] = ChatGroq(
+                model="openai/gpt-oss-20b",
+                temperature=0.1,
+                api_key=groq_api_key
+            )
             
-            with st.expander("Click to see detailed thinking log", expanded=True):
-                for i, log_entry in enumerate(result.get("thinking_log", [])):
-                    st.markdown(f'<div class="thinking-box">{log_entry}</div>', unsafe_allow_html=True)
+            # PREVIEW MODELS
+            try:
+                self.models['llama4_maverick'] = ChatGroq(
+                    model="meta-llama/llama-4-maverick-17b-128e-instruct",
+                    temperature=0.1,
+                    api_key=groq_api_key
+                )
+            except:
+                pass
             
-            # Stats
-            st.markdown("---")
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Models Used", len(system.model_manager.models))
-            with col2:
-                st.metric("Thinking Steps", len(result.get("thinking_log", [])))
-            with col3:
-                st.metric("Status", "✅ Success")
+            try:
+                self.models['llama4_scout'] = ChatGroq(
+                    model="meta-llama/llama-4-scout-17b-16e-instruct",
+                    temperature=0.1,
+                    api_key=groq_api_key
+                )
+            except:
+                pass
+            
+            try:
+                self.models['qwen3_32b'] = ChatGroq(
+                    model="qwen/qwen3-32b",
+                    temperature=0.1,
+                    api_key=groq_api_key
+                )
+            except:
+                pass
+            
+            if not self.models:
+                raise RuntimeError("❌ No models could be initialized")
+            
+        except Exception as e:
+            raise RuntimeError(f"❌ Failed to initialize Groq models: {e}")
+
+    def get_diverse_models(self, count: int = 3) -> List:
+        available_count = min(count, len(self.models))
+        return random.sample(list(self.models.values()), available_count)
+
+    def get_best_model(self) -> Any:
+        for model_name in ['llama3.3_70b', 'llama4_maverick', 'qwen3_32b', 'llama4_scout', 'llama3.1_8b']:
+            if model_name in self.models:
+                return self.models[model_name]
+        return list(self.models.values())[0] if self.models else None
+    
+    def get_model_names(self) -> List[str]:
+        return list(self.models.keys())
+
+# --- SEARCH TOOL ---
+
+@tool
+def enhanced_multi_search(query: str) -> str:
+    """Search with Tavily and Wikipedia"""
+    all_results = []
+    
+    # Tavily Search
+    if os.getenv("TAVILY_API_KEY"):
+        try:
+            search_tool = TavilySearchResults(max_results=3)
+            results = search_tool.invoke(query)
+            
+            if isinstance(results, list):
+                for doc in results:
+                    if isinstance(doc, dict):
+                        url = doc.get('url', 'N/A')
+                        content = doc.get('content', '')
+                        all_results.append(f"<WebResult url='{url}'>{content}</WebResult>")
+                    elif isinstance(doc, str):
+                        all_results.append(f"<WebResult>{doc}</WebResult>")
+            elif isinstance(results, str):
+                all_results.append(f"<WebResult>{results}</WebResult>")
                 
         except Exception as e:
-            st.error(f"❌ Error processing query: {str(e)}")
-            st.exception(e)
+            st.warning(f"⚠️ Tavily search error: {e}")
+    
+    # Wikipedia Search
+    try:
+        docs = WikipediaLoader(query=query, load_max_docs=1).load()
+        for doc in docs:
+            content = doc.page_content[:1500]
+            title = doc.metadata.get('title', 'Wikipedia')
+            all_results.append(f"<WikiResult title='{title}'>{content}</WikiResult>")
+    except Exception as e:
+        pass
+    
+    if not all_results:
+        return "Search did not yield any results."
+    
+    return "\n\n---\n\n".join(all_results)
 
-elif process_button and not query:
-    st.warning("⚠️ Please enter a question first!")
+# --- CONSENSUS SYSTEM ---
 
-# Footer
-st.markdown("---")
-st.markdown("""
-<div style='text-align: center; color: #666; padding: 2rem;'>
-    <p>Built with ❤️ using Streamlit, LangChain, and Groq AI</p>
-    <p>🔒 Your queries are processed securely and not stored</p>
-</div>
-""", unsafe_allow_html=True)
+class ConsensusVotingSystem:
+    def __init__(self, model_manager: MultiModelManager):
+        self.model_manager = model_manager
+        self.reflection_agent = self._create_reflection_agent()
+
+    def _create_reflection_agent(self):
+        best_model = self.model_manager.get_best_model()
+        return {'model': best_model, 'prompt': REFLECTION_SYSTEM_PROMPT} if best_model else None
+
+    async def get_consensus_answer(self, query: str, search_results: str, thinking_log: List[str]) -> str:
+        models = self.model_manager.get_diverse_models()
+        if not models:
+            thinking_log.append("❌ No models available")
+            return "No models available"
+        
+        thinking_log.append(f"🤝 Starting consensus with {len(models)} agents...")
+        tasks = [self._query_single_agent(model, query, search_results, i+1) for i, model in enumerate(models)]
+        responses = await asyncio.gather(*tasks, return_exceptions=True)
+
+        valid_responses = [res for res in responses if isinstance(res, str) and "agent error" not in res.lower()]
+        thinking_log.append(f"📝 Collected {len(valid_responses)} valid responses")
+
+        if not valid_responses:
+            thinking_log.append("❌ All agents failed")
+            return "All agents failed to generate a response"
+            
+        consensus_answer = self._apply_consensus_voting(valid_responses, thinking_log)
+        
+        if self.reflection_agent:
+            return await self._validate_with_reflection(consensus_answer, query, thinking_log)
+        return consensus_answer
+
+    async def _query_single_agent(self, model, query: str, search_results: str, agent_num: int) -> str:
+        try:
+            prompt = f"Question: {query}\n\nAvailable Information:\n{search_results}\n\nBased ONLY on the information above, provide the exact answer requested."
+            response = await model.ainvoke([
+                SystemMessage(content=CONSENSUS_SYSTEM_PROMPT), 
+                HumanMessage(content=prompt)
+            ])
+            answer = response.content.strip()
+            extracted = answer.split("FINAL ANSWER:")[-1].strip() if "FINAL ANSWER:" in answer else answer
+            return extracted
+        except Exception as e:
+            return f"Agent error: {e}"
+
+    def _apply_consensus_voting(self, responses: List[str], thinking_log: List[str]) -> str:
+        thinking_log.append("🗳️  Voting on best answer...")
+        if not responses:
+            return "Unable to determine consensus"
+        
+        cleaned = [r.strip()[:500] for r in responses if r and len(r.strip()) > 10]
+        
+        if not cleaned:
+            return "No valid responses to vote on"
+        
+        if len(set(r.lower()[:100] for r in cleaned)) == 1:
+            thinking_log.append("✅ All agents agreed")
+            return cleaned[0]
+        
+        vote_counts = Counter(r.lower()[:100] for r in cleaned)
+        most_common_key = vote_counts.most_common(1)[0][0]
+        
+        for resp in cleaned:
+            if resp.lower()[:100] == most_common_key:
+                thinking_log.append(f"✅ Consensus reached")
+                return resp
+        
+        return cleaned[0]
+
+    async def _validate_with_reflection(self, answer: str, query: str, thinking_log: List[str]) -> str:
+        if not self.reflection_agent:
+            return answer
+        
+        thinking_log.append("🤔 Reflecting on answer...")
+        try:
+            prompt = f"Original Question: {query}\n\nProposed Answer: {answer}\n\nValidate this answer."
+            response = await self.reflection_agent['model'].ainvoke([
+                SystemMessage(content=self.reflection_agent['prompt']), 
+                HumanMessage(content=prompt)
+            ])
+            result = response.content.strip()
+            
+            if "CORRECTED:" in result:
+                thinking_log.append("📝 Answer was corrected")
+                return result.split("CORRECTED:")[-1].strip()
+            if "VALIDATED:" in result:
+                thinking_log.append("✅ Answer validated")
+                return result.split("VALIDATED:")[-1].strip()
+            return answer
+        except Exception as e:
+            thinking_log.append(f"⚠️ Reflection failed: {str(e)[:50]}")
+            return answer
+
+# --- GRAPH SYSTEM ---
+
+class AgentState(TypedDict):
+    query: str
+    search_results: str
+    thinking_log: Annotated[List[str], operator.add]
+    final_answer: str
+
+class AutonomousLangGraphSystem:
+    def __init__(self):
+        self.model_manager = MultiModelManager()
+        self.consensus_system = ConsensusVotingSystem(self.model_manager)
+        self.graph = self._build_graph()
+
+    def _build_graph(self) -> StateGraph:
+        g = StateGraph(AgentState)
+        g.add_node("search", self._search_node)
+        g.add_node("consensus", self._consensus_node)
+        g.set_entry_point("search")
+        g.add_edge("search", "consensus")
+        g.add_edge("consensus", END)
+        return g.compile()
+
+    def _search_node(self, state: AgentState) -> dict:
+        log = ["🔍 Searching multiple sources..."]
+        search_results = enhanced_multi_search.invoke({"query": state["query"]})
+        log.append("✅ Search complete")
+        return {"search_results": search_results, "thinking_log": log}
+
+    async def _consensus_node(self, state: AgentState) -> dict:
+        log = []
+        consensus_answer = await self.consensus_system.get_consensus_answer(
+            state['query'], state['search_results'], log
+        )
+        return {"final_answer": consensus_answer, "thinking_log": log}
+    
+    def process_query(self, query: str) -> Dict:
+        initial_state = {"query": query, "thinking_log": []}
+        config = {"configurable": {"thread_id": f"agent_{time.time()}"}}
+        try:
+            final_state = asyncio.run(self.graph.ainvoke(initial_state, config))
+            return {
+                "answer": final_state.get("final_answer", "Processing error"),
+                "thinking_log": final_state.get("thinking_log", [])
+            }
+        except Exception as e:
+            return {
+                "answer": f"Error: {e}", 
+                "thinking_log": [f"Error: {e}"]
+            }
+
+# --- SESSION STATE INITIALIZATION ---
+
+def init_session_state():
+    """Initialize session state variables"""
+    if 'messages' not in st.session_state:
+        st.session_state.messages = []
+    if 'system' not in st.session_state:
+        try:
+            st.session_state.system = AutonomousLangGraphSystem()
+            st.session_state.system_ready = True
+        except Exception as e:
+            st.session_state.system_ready = False
+            st.session_state.error_message = str(e)
+    if 'show_thinking' not in st.session_state:
+        st.session_state.show_thinking = True
+
+# --- STREAMLIT UI ---
+
+def main():
+    # Header
+    st.markdown('<h1 class="main-header">🤖 Multi-Agent AI System</h1>', unsafe_allow_html=True)
+    st.markdown("### Powered by Groq LLMs with Consensus Voting & Reflection")
+    
+    # Initialize session state
+    init_session_state()
+    
+    # Sidebar
+    with st.sidebar:
+        st.header("⚙️ Settings")
+        
+        # Check system status
+        if not st.session_state.system_ready:
+            st.error("❌ System Error")
+            st.error(st.session_state.get('error_message', 'Unknown error'))
+            st.info("💡 Make sure GROQ_API_KEY is set in your .env file")
+            return
+        
+        st.success("✅ System Ready")
+        
+        # Display available models
+        if st.session_state.system:
+            model_names = st.session_state.system.model_manager.get_model_names()
+            st.info(f"🤖 **Active Models:** {len(model_names)}")
+            with st.expander("View Models"):
+                for model in model_names:
+                    st.text(f"• {model}")
+        
+        # Settings
+        st.session_state.show_thinking = st.checkbox(
+            "Show Thinking Process", 
+            value=st.session_state.show_thinking,
+            help="Display the internal reasoning of agents"
+        )
+        
+        st.divider()
+        
+        # Clear chat button
+        if st.button("🗑️ Clear Chat History", use_container_width=True):
+            st.session_state.messages = []
+            st.rerun()
+        
+        # Download chat
+        if st.session_state.messages:
+            chat_export = "\n\n".join([
+                f"{'User' if msg['role'] == 'user' else 'Assistant'}: {msg['content']}"
+                for msg in st.session_state.messages
+            ])
+            st.download_button(
+                label="📥 Download Chat",
+                data=chat_export,
+                file_name=f"chat_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
+                mime="text/plain",
+                use_container_width=True
+            )
+        
+        st.divider()
+        st.caption("Built with Streamlit + LangGraph")
+        st.caption("Models: Llama 3.3, Llama 4, Qwen 3")
+    
+    # Main chat interface
+    st.markdown("---")
+    
+    # Display chat messages
+    for message in st.session_state.messages:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+            
+            # Show thinking log if available
+            if message["role"] == "assistant" and "thinking_log" in message and st.session_state.show_thinking:
+                with st.expander("🧠 View Thinking Process"):
+                    thinking_html = "<div class='thinking-log'>"
+                    for log_entry in message["thinking_log"]:
+                        thinking_html += f"{log_entry}<br>"
+                    thinking_html += "</div>"
+                    st.markdown(thinking_html, unsafe_allow_html=True)
+    
+    # Chat input
+    if prompt := st.chat_input("Ask me anything..."):
+        # Add user message
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.markdown(prompt)
+        
+        # Process query
+        with st.chat_message("assistant"):
+            with st.spinner("🤔 Consulting agents..."):
+                result = st.session_state.system.process_query(prompt)
+                
+                # Display answer
+                st.markdown(f'<div class="answer-box">{result["answer"]}</div>', unsafe_allow_html=True)
+                
+                # Display thinking process
+                if st.session_state.show_thinking:
+                    with st.expander("🧠 View Thinking Process"):
+                        thinking_html = "<div class='thinking-log'>"
+                        for log_entry in result["thinking_log"]:
+                            thinking_html += f"{log_entry}<br>"
+                        thinking_html += "</div>"
+                        st.markdown(thinking_html, unsafe_allow_html=True)
+        
+        # Add assistant message
+        st.session_state.messages.append({
+            "role": "assistant", 
+            "content": result["answer"],
+            "thinking_log": result["thinking_log"]
+        })
+    
+    # Example questions
+    if not st.session_state.messages:
+        st.markdown("### 💡 Try asking:")
+        col1, col2, col3 = st.columns(3)
+        
+        example_questions = [
+            "What is the capital of France?",
+            "Explain quantum computing",
+            "Who won the 2024 Nobel Prize in Physics?"
+        ]
+        
+        for col, question in zip([col1, col2, col3], example_questions):
+            with col:
+                if st.button(question, use_container_width=True):
+                    st.session_state.messages.append({"role": "user", "content": question})
+                    st.rerun()
+
+if __name__ == "__main__":
+    main()
