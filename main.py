@@ -1,6 +1,6 @@
 """
 Ultra-Enhanced Multi-Agent LLM System with Consensus Voting
-Optimized for cloud deployment without Together dependencies
+Optimized for Streamlit Cloud deployment
 """
 
 import os
@@ -8,7 +8,6 @@ import time
 import random
 import operator
 from typing import List, Dict, Any, TypedDict, Annotated
-from dotenv import load_dotenv
 from collections import Counter
 import asyncio
 import nest_asyncio
@@ -20,12 +19,24 @@ from langchain_core.tools import tool
 from langchain_community.tools.tavily_search import TavilySearchResults
 from langchain_community.document_loaders import WikipediaLoader
 from langgraph.graph import StateGraph, END
-from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
+from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_groq import ChatGroq
 
-load_dotenv()
+# Try to load from Streamlit secrets first, then fall back to .env
+try:
+    import streamlit as st
+    def get_env(key):
+        try:
+            return st.secrets[key]
+        except:
+            return os.getenv(key)
+except ImportError:
+    from dotenv import load_dotenv
+    load_dotenv()
+    def get_env(key):
+        return os.getenv(key)
 
-# --- GENERALIZED SYSTEM PROMPTS ---
+# --- SYSTEM PROMPTS ---
 
 CONSENSUS_SYSTEM_PROMPT = """You are part of a multi-agent expert panel. Your role is to provide the most accurate and precise answer possible based ONLY on the provided information.
     EXTRACTION RULES:
@@ -45,35 +56,32 @@ Your task is to review the proposed answer based on the original question and th
 
 Respond with 'VALIDATED: [answer]' if it is correct, or 'CORRECTED: [better_answer]' if you can provide a more accurate or concise answer based on the context."""
 
-# --- MODEL AND TOOL MANAGEMENT ---
+# --- MODEL MANAGEMENT ---
 
 class MultiModelManager:
-    """Manages multiple Groq LLM models for cloud deployment"""
+    """Manages multiple Groq LLM models"""
     def __init__(self):
         self.models = {}
         self._initialize_models()
 
     def _initialize_models(self):
         """Initialize available Groq models"""
-        groq_api_key = os.getenv("GROQ_API_KEY")
+        groq_api_key = get_env("GROQ_API_KEY")
         
         if not groq_api_key:
-            raise RuntimeError("❌ GROQ_API_KEY not found in environment variables")
+            raise RuntimeError("❌ GROQ_API_KEY not found. Please set it in Streamlit secrets or .env file")
         
         try:
-            # Primary model - high performance
             self.models['groq_llama3_70b'] = ChatGroq(
                 model="llama3-70b-8192", 
                 temperature=0.1, 
                 api_key=groq_api_key
             )
-            # Backup model - fast and efficient
             self.models['groq_llama3_8b'] = ChatGroq(
                 model="llama3-8b-8192", 
                 temperature=0.1, 
                 api_key=groq_api_key
             )
-            # Alternative model - diverse reasoning
             self.models['groq_mixtral'] = ChatGroq(
                 model="mixtral-8x7b-32768", 
                 temperature=0.1, 
@@ -95,7 +103,7 @@ class MultiModelManager:
                 return self.models[model_name]
         return list(self.models.values())[0] if self.models else None
 
-# --- GENERALIZED TOOLS ---
+# --- SEARCH TOOL ---
 
 @tool
 def enhanced_multi_search(query: str) -> str:
@@ -103,11 +111,12 @@ def enhanced_multi_search(query: str) -> str:
     all_results = []
     
     # Tavily Search
-    if os.getenv("TAVILY_API_KEY"):
+    tavily_key = get_env("TAVILY_API_KEY")
+    if tavily_key:
         search_variants = [query, f"facts about {query}"]
         for variant in search_variants:
             try:
-                search_tool = TavilySearchResults(max_results=2)
+                search_tool = TavilySearchResults(max_results=2, api_key=tavily_key)
                 docs = search_tool.invoke({"query": variant})
                 for doc in docs:
                     all_results.append(f"<WebResult url='{doc.get('url', '')}'>{doc.get('content', '')}</WebResult>")
@@ -119,17 +128,16 @@ def enhanced_multi_search(query: str) -> str:
     try:
         docs = WikipediaLoader(query=query, load_max_docs=1).load()
         for doc in docs:
-            all_results.append(f"<WikiResult title='{doc.metadata.get('title', '')}'>{doc.page_content}</WikiResult>")
+            all_results.append(f"<WikiResult title='{doc.metadata.get('title', '')}'>{doc.page_content[:500]}</WikiResult>")
     except Exception as e:
-        print(f"ℹ️ Wikipedia search returned no results: {e}")
+        print(f"ℹ️ Wikipedia search: {e}")
     
     if not all_results:
         return "Comprehensive search did not yield any results."
     
     return "\n\n---\n\n".join(all_results)
 
-
-# --- CORE AGENT LOGIC ---
+# --- CONSENSUS SYSTEM ---
 
 class ConsensusVotingSystem:
     """Implements a generalized multi-agent consensus voting system."""
@@ -152,7 +160,7 @@ class ConsensusVotingSystem:
         responses = await asyncio.gather(*tasks, return_exceptions=True)
 
         valid_responses = [res for res in responses if isinstance(res, str) and "agent error" not in res.lower()]
-        thinking_log.append(f"📝 Raw answers from agents: {valid_responses}")
+        thinking_log.append(f"📝 Collected {len(valid_responses)} agent responses")
 
         if not valid_responses:
             thinking_log.append("❌ All agents failed to generate a response.")
@@ -185,8 +193,8 @@ class ConsensusVotingSystem:
         
         vote_counts = Counter(cleaned)
         most_common = vote_counts.most_common(1)[0]
-        thinking_log.append(f"📊 Vote counts: {vote_counts.most_common()}")
-        thinking_log.append(f"✅ Consensus answer is '{most_common[0]}' with {most_common[1]} votes.")
+        thinking_log.append(f"📊 Vote counts: {dict(vote_counts.most_common())}")
+        thinking_log.append(f"✅ Consensus reached with {most_common[1]} votes")
         return most_common[0].capitalize()
 
     async def _validate_with_reflection(self, answer: str, query: str, thinking_log: List[str]) -> str:
@@ -201,18 +209,20 @@ class ConsensusVotingSystem:
                 HumanMessage(content=prompt)
             ])
             result = response.content.strip()
-            thinking_log.append(f"🕵️ Reflection agent output: {result}")
+            thinking_log.append(f"🕵️ Reflection complete")
             
             if "CORRECTED:" in result:
+                thinking_log.append("📝 Answer was corrected by reflection agent")
                 return result.split("CORRECTED:")[-1].strip()
             if "VALIDATED:" in result:
+                thinking_log.append("✅ Answer validated by reflection agent")
                 return result.split("VALIDATED:")[-1].strip()
             return answer
         except Exception as e:
             thinking_log.append(f"⚠️ Reflection agent failed: {e}")
             return answer
 
-# --- GRAPH DEFINITION AND EXECUTION ---
+# --- GRAPH SYSTEM ---
 
 class AgentState(TypedDict):
     query: str
@@ -221,7 +231,7 @@ class AgentState(TypedDict):
     final_answer: str
 
 class AutonomousLangGraphSystem:
-    """Fully autonomous system with a simple search -> consensus graph."""
+    """Fully autonomous system with search -> consensus graph."""
     def __init__(self):
         self.model_manager = MultiModelManager()
         self.consensus_system = ConsensusVotingSystem(self.model_manager)
@@ -265,21 +275,3 @@ class AutonomousLangGraphSystem:
                 "answer": f"A critical error occurred: {e}", 
                 "thinking_log": [f"Error: {e}"]
             }
-
-
-if __name__ == "__main__":
-    system = AutonomousLangGraphSystem()
-    
-    while True:
-        question = input("\nEnter your question (or type 'exit' to quit): ")
-        if question.lower() == 'exit':
-            break
-        print("\n⏳ Processing...")
-        output = system.process_query(question)
-        print("\n" + "="*50)
-        print("🤔 Thinking Process Log:")
-        for entry in output['thinking_log']:
-            print(f"   {entry}")
-        print("\n" + "="*50)
-        print(f"✅ Final Answer: {output['answer']}")
-        print("="*50)
