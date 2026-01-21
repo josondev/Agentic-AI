@@ -2,8 +2,8 @@ services:
   - type: web
     name: agentic-ai-system
     env: python
-    region: oregon
-    plan: free
+    region: Singapore  # Change to your preferred region
+    plan: free      # Options: free, starter, standard
     branch: main
     buildCommand: pip install -r requirements.txt
     startCommand: bash start.sh
@@ -11,10 +11,9 @@ services:
       - key: PYTHON_VERSION
         value: 3.11.0
       - key: GROQ_API_KEY
-        sync: false
-      - key: TOGETHER_API_KEY
-        sync: false
+        sync: false  # Will be set manually in Render dashboard
       - key: TAVILY_API_KEY
-        sync: false
+        sync: false  # Will be set manually in Render dashboard
       - key: OLLAMA_AVAILABLE
         value: False
+    healthCheckPath: /health
