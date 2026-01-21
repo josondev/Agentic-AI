@@ -1,7 +1,6 @@
 """
 Ultra-Enhanced Multi-Agent LLM System with Consensus Voting
-Implements latest 2024-2025 research for maximum evaluation performance.
-This version is fully autonomous and includes a transparent thinking process.
+Optimized for cloud deployment without Together dependencies
 """
 
 import os
@@ -14,7 +13,7 @@ from collections import Counter
 import asyncio
 import nest_asyncio
 
-# Apply the patch to allow nested event loops in environments like Jupyter
+# Apply the patch to allow nested event loops
 nest_asyncio.apply()
 
 from langchain_core.tools import tool
@@ -23,13 +22,6 @@ from langchain_community.document_loaders import WikipediaLoader
 from langgraph.graph import StateGraph, END
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from langchain_groq import ChatGroq
-
-# Open-source model integrations
-try:
-    from langchain_ollama import ChatOllama
-    OLLAMA_AVAILABLE = True
-except ImportError:
-    OLLAMA_AVAILABLE = False
 
 load_dotenv()
 
@@ -56,46 +48,40 @@ Respond with 'VALIDATED: [answer]' if it is correct, or 'CORRECTED: [better_answ
 # --- MODEL AND TOOL MANAGEMENT ---
 
 class MultiModelManager:
-    """Manages multiple open-source and commercial LLM models"""
+    """Manages multiple Groq LLM models for cloud deployment"""
     def __init__(self):
         self.models = {}
         self._initialize_models()
 
     def _initialize_models(self):
-        """Initialize available models in priority order"""
-        if os.getenv("GROQ_API_KEY"):
-            try:
-                # Primary model
-                self.models['groq_llama3_70b'] = ChatGroq(
-                    model="llama3-70b-8192", 
-                    temperature=0.1, 
-                    api_key=os.getenv("GROQ_API_KEY")
-                )
-                # Backup models for diversity
-                self.models['groq_llama3_8b'] = ChatGroq(
-                    model="llama3-8b-8192", 
-                    temperature=0.1, 
-                    api_key=os.getenv("GROQ_API_KEY")
-                )
-                self.models['groq_mixtral'] = ChatGroq(
-                    model="mixtral-8x7b-32768", 
-                    temperature=0.1, 
-                    api_key=os.getenv("GROQ_API_KEY")
-                )
-            except Exception as e:
-                print(f"⚠️ Groq models initialization error: {e}")
+        """Initialize available Groq models"""
+        groq_api_key = os.getenv("GROQ_API_KEY")
         
-        # Only initialize Ollama if explicitly available and not disabled
-        if OLLAMA_AVAILABLE and os.getenv("OLLAMA_AVAILABLE", "True").lower() != "false":
-            try:
-                self.models['ollama_llama3'] = ChatOllama(model="llama3")
-            except Exception as e:
-                print(f"ℹ️ Ollama models not available (expected in cloud): {e}")
+        if not groq_api_key:
+            raise RuntimeError("❌ GROQ_API_KEY not found in environment variables")
         
-        if not self.models:
-            raise RuntimeError("❌ No LLM models available. Please set GROQ_API_KEY in environment variables.")
-        
-        print(f"✅ Initialized {len(self.models)} models: {list(self.models.keys())}")
+        try:
+            # Primary model - high performance
+            self.models['groq_llama3_70b'] = ChatGroq(
+                model="llama3-70b-8192", 
+                temperature=0.1, 
+                api_key=groq_api_key
+            )
+            # Backup model - fast and efficient
+            self.models['groq_llama3_8b'] = ChatGroq(
+                model="llama3-8b-8192", 
+                temperature=0.1, 
+                api_key=groq_api_key
+            )
+            # Alternative model - diverse reasoning
+            self.models['groq_mixtral'] = ChatGroq(
+                model="mixtral-8x7b-32768", 
+                temperature=0.1, 
+                api_key=groq_api_key
+            )
+            print(f"✅ Initialized {len(self.models)} models: {list(self.models.keys())}")
+        except Exception as e:
+            raise RuntimeError(f"❌ Failed to initialize Groq models: {e}")
 
     def get_diverse_models(self, count: int = 3) -> List:
         """Get a diverse set of models for consensus."""
@@ -104,8 +90,7 @@ class MultiModelManager:
 
     def get_best_model(self) -> Any:
         """Get the highest performing model for reflection."""
-        # Priority order: 70B > Mixtral > 8B > Ollama
-        for model_name in ['groq_llama3_70b', 'groq_mixtral', 'groq_llama3_8b', 'ollama_llama3']:
+        for model_name in ['groq_llama3_70b', 'groq_mixtral', 'groq_llama3_8b']:
             if model_name in self.models:
                 return self.models[model_name]
         return list(self.models.values())[0] if self.models else None
@@ -270,7 +255,6 @@ class AutonomousLangGraphSystem:
         initial_state = {"query": query, "thinking_log": []}
         config = {"configurable": {"thread_id": f"agent_{time.time()}"}}
         try:
-            # Use asyncio.run to execute the async graph and get the final state.
             final_state = asyncio.run(self.graph.ainvoke(initial_state, config))
             return {
                 "answer": final_state.get("final_answer", "Processing resulted in an error."),
