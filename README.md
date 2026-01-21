@@ -75,7 +75,6 @@ The system uses API keys for various services. These should be stored in a `.env
     # .env file
     GROQ_API_KEY="your-groq-api-key"
     TAVILY_API_KEY="your-tavily-api-key"
-    TOGETHER_API_KEY="your-together-ai-api-key"
     ```
 
 
@@ -83,4 +82,5 @@ The system uses API keys for various services. These should be stored in a `.env
 ## How to Run
 
 Save the provided code as a Python file (e.g., `main.py`). You can run the script directly from your terminal to see it process a set of test questions.
+
 
