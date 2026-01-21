@@ -27,7 +27,6 @@ from langchain_groq import ChatGroq
 # Open-source model integrations
 try:
     from langchain_ollama import ChatOllama
-    from langchain_together import ChatTogether
     OLLAMA_AVAILABLE = True
 except ImportError:
     OLLAMA_AVAILABLE = False
@@ -65,26 +64,48 @@ class MultiModelManager:
     def _initialize_models(self):
         """Initialize available models in priority order"""
         if os.getenv("GROQ_API_KEY"):
-            self.models['groq_llama3_70b'] = ChatGroq(model="llama3-70b-8192", temperature=0.1, api_key=os.getenv("GROQ_API_KEY"))
-        if OLLAMA_AVAILABLE:
+            try:
+                # Primary model
+                self.models['groq_llama3_70b'] = ChatGroq(
+                    model="llama3-70b-8192", 
+                    temperature=0.1, 
+                    api_key=os.getenv("GROQ_API_KEY")
+                )
+                # Backup models for diversity
+                self.models['groq_llama3_8b'] = ChatGroq(
+                    model="llama3-8b-8192", 
+                    temperature=0.1, 
+                    api_key=os.getenv("GROQ_API_KEY")
+                )
+                self.models['groq_mixtral'] = ChatGroq(
+                    model="mixtral-8x7b-32768", 
+                    temperature=0.1, 
+                    api_key=os.getenv("GROQ_API_KEY")
+                )
+            except Exception as e:
+                print(f"⚠️ Groq models initialization error: {e}")
+        
+        # Only initialize Ollama if explicitly available and not disabled
+        if OLLAMA_AVAILABLE and os.getenv("OLLAMA_AVAILABLE", "True").lower() != "false":
             try:
                 self.models['ollama_llama3'] = ChatOllama(model="llama3")
             except Exception as e:
-                print(f"Ollama models not available: {e}")
-        if os.getenv("TOGETHER_API_KEY"):
-            try:
-                self.models['together_llama3'] = ChatTogether(model="meta-llama/Llama-3-70b-chat-hf", api_key=os.getenv("TOGETHER_API_KEY"))
-            except Exception as e:
-                print(f"Together AI models not available: {e}")
+                print(f"ℹ️ Ollama models not available (expected in cloud): {e}")
+        
+        if not self.models:
+            raise RuntimeError("❌ No LLM models available. Please set GROQ_API_KEY in environment variables.")
+        
         print(f"✅ Initialized {len(self.models)} models: {list(self.models.keys())}")
 
     def get_diverse_models(self, count: int = 3) -> List:
         """Get a diverse set of models for consensus."""
-        return random.sample(list(self.models.values()), min(count, len(self.models)))
+        available_count = min(count, len(self.models))
+        return random.sample(list(self.models.values()), available_count)
 
     def get_best_model(self) -> Any:
         """Get the highest performing model for reflection."""
-        for model_name in ['groq_llama3_70b', 'together_llama3', 'ollama_llama3']:
+        # Priority order: 70B > Mixtral > 8B > Ollama
+        for model_name in ['groq_llama3_70b', 'groq_mixtral', 'groq_llama3_8b', 'ollama_llama3']:
             if model_name in self.models:
                 return self.models[model_name]
         return list(self.models.values())[0] if self.models else None
@@ -95,6 +116,8 @@ class MultiModelManager:
 def enhanced_multi_search(query: str) -> str:
     """Autonomous search with multiple strategies and sources."""
     all_results = []
+    
+    # Tavily Search
     if os.getenv("TAVILY_API_KEY"):
         search_variants = [query, f"facts about {query}"]
         for variant in search_variants:
@@ -103,13 +126,21 @@ def enhanced_multi_search(query: str) -> str:
                 docs = search_tool.invoke({"query": variant})
                 for doc in docs:
                     all_results.append(f"<WebResult url='{doc.get('url', '')}'>{doc.get('content', '')}</WebResult>")
-            except Exception: continue
+            except Exception as e:
+                print(f"⚠️ Tavily search error: {e}")
+                continue
+    
+    # Wikipedia Search
     try:
         docs = WikipediaLoader(query=query, load_max_docs=1).load()
         for doc in docs:
             all_results.append(f"<WikiResult title='{doc.metadata.get('title', '')}'>{doc.page_content}</WikiResult>")
-    except Exception: pass
-    if not all_results: return "Comprehensive search did not yield any results."
+    except Exception as e:
+        print(f"ℹ️ Wikipedia search returned no results: {e}")
+    
+    if not all_results:
+        return "Comprehensive search did not yield any results."
+    
     return "\n\n---\n\n".join(all_results)
 
 
@@ -159,7 +190,9 @@ class ConsensusVotingSystem:
 
     def _apply_general_consensus_voting(self, responses: List[str], thinking_log: List[str]) -> str:
         thinking_log.append("🗳️ Applying consensus voting...")
-        if not responses: return "Unable to determine a consensus."
+        if not responses:
+            return "Unable to determine a consensus."
+        
         cleaned = [r.strip().lower() for r in responses if r]
         if not cleaned:
             thinking_log.append("⚠️ No valid responses to form a consensus.")
@@ -172,15 +205,23 @@ class ConsensusVotingSystem:
         return most_common[0].capitalize()
 
     async def _validate_with_reflection(self, answer: str, query: str, thinking_log: List[str]) -> str:
-        if not self.reflection_agent: return answer
+        if not self.reflection_agent:
+            return answer
+        
         thinking_log.append("🤔 Reflecting on the consensus answer...")
         try:
             prompt = f"Original Question: {query}\nProposed Answer: {answer}\n\nValidate this answer."
-            response = await self.reflection_agent['model'].ainvoke([SystemMessage(content=self.reflection_agent['prompt']), HumanMessage(content=prompt)])
+            response = await self.reflection_agent['model'].ainvoke([
+                SystemMessage(content=self.reflection_agent['prompt']), 
+                HumanMessage(content=prompt)
+            ])
             result = response.content.strip()
             thinking_log.append(f"🕵️ Reflection agent output: {result}")
-            if "CORRECTED:" in result: return result.split("CORRECTED:")[-1].strip()
-            if "VALIDATED:" in result: return result.split("VALIDATED:")[-1].strip()
+            
+            if "CORRECTED:" in result:
+                return result.split("CORRECTED:")[-1].strip()
+            if "VALIDATED:" in result:
+                return result.split("VALIDATED:")[-1].strip()
             return answer
         except Exception as e:
             thinking_log.append(f"⚠️ Reflection agent failed: {e}")
@@ -230,14 +271,16 @@ class AutonomousLangGraphSystem:
         config = {"configurable": {"thread_id": f"agent_{time.time()}"}}
         try:
             # Use asyncio.run to execute the async graph and get the final state.
-            # ainvoke runs the full graph and returns the final state, including the accumulated log.
             final_state = asyncio.run(self.graph.ainvoke(initial_state, config))
             return {
                 "answer": final_state.get("final_answer", "Processing resulted in an error."),
                 "thinking_log": final_state.get("thinking_log", [])
             }
         except Exception as e:
-            return {"answer": f"A critical error occurred: {e}", "thinking_log": [f"Error: {e}"]}
+            return {
+                "answer": f"A critical error occurred: {e}", 
+                "thinking_log": [f"Error: {e}"]
+            }
 
 
 if __name__ == "__main__":
