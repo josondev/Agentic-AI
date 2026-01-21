@@ -5,9 +5,9 @@ langchain==0.1.0
 langchain-core==0.1.10
 langchain-community==0.0.13
 langchain-groq==0.0.1
-langchain-together==0.0.1
 langchain-ollama==0.0.1
 langgraph==0.0.20
 tavily-python==0.3.0
 wikipedia==1.4.0
 nest-asyncio==1.5.8
+
