@@ -1,3 +1,7 @@
+"""
+Render-optimized Flask app for the Agentic AI System
+Production-ready with proper error handling and logging
+"""
 import nest_asyncio
 nest_asyncio.apply()
 
@@ -44,8 +48,11 @@ def home():
         "service": "Agentic AI System",
         "version": "1.0",
         "endpoints": {
-            "health": "/",
+            "health": "/health (GET)",
             "process": "/process (POST)"
+        },
+        "usage": {
+            "example": "POST /process with JSON body: {\"query\": \"your question here\"}"
         }
     }), 200
 
@@ -55,11 +62,14 @@ def health():
     if system is None:
         initialize_system()
     
+    status_code = 200 if system else 503
+    
     return jsonify({
         "status": "healthy" if system else "initializing",
         "system_ready": system is not None,
-        "error": init_error
-    }), 200 if system else 503
+        "error": init_error,
+        "models_available": len(system.model_manager.models) if system else 0
+    }), status_code
 
 @app.route('/process', methods=['POST'])
 def process_query():
@@ -71,18 +81,22 @@ def process_query():
     # Check for initialization errors
     if init_error:
         return jsonify({
-            "error": f"System initialization failed: {init_error}"
+            "success": False,
+            "error": f"System initialization failed: {init_error}",
+            "help": "Please check your API keys (GROQ_API_KEY, TAVILY_API_KEY)"
         }), 500
     
     if not system:
         return jsonify({
+            "success": False,
             "error": "System is still initializing. Please try again in a moment."
         }), 503
     
     # Validate request
     if not request.is_json:
         return jsonify({
-            "error": "Request must be JSON"
+            "success": False,
+            "error": "Request must be JSON with 'query' field"
         }), 400
     
     data = request.get_json()
@@ -90,10 +104,11 @@ def process_query():
     
     if not query or not isinstance(query, str):
         return jsonify({
+            "success": False,
             "error": "'query' must be a non-empty string"
         }), 400
     
-    # Process the query
+    # Log the query (truncated)
     logging.info(f"Processing query: '{query[:100]}...'")
     
     try:
@@ -104,7 +119,11 @@ def process_query():
             "success": True,
             "query": query,
             "answer": result.get("answer"),
-            "thinking_log": result.get("thinking_log", [])
+            "thinking_log": result.get("thinking_log", []),
+            "metadata": {
+                "models_used": len(system.model_manager.models),
+                "timestamp": result.get("timestamp")
+            }
         }), 200
         
     except Exception as e:
@@ -114,6 +133,22 @@ def process_query():
             "error": "An error occurred while processing your request",
             "details": str(e)
         }), 500
+
+@app.errorhandler(404)
+def not_found(e):
+    """Handle 404 errors"""
+    return jsonify({
+        "error": "Endpoint not found",
+        "available_endpoints": ["/", "/health", "/process"]
+    }), 404
+
+@app.errorhandler(500)
+def internal_error(e):
+    """Handle 500 errors"""
+    return jsonify({
+        "error": "Internal server error",
+        "message": str(e)
+    }), 500
 
 if __name__ == "__main__":
     # Render sets the PORT environment variable
