@@ -1,6 +1,6 @@
 """
-Multi-Agent AI System - Streamlit Web Interface
-Updated with current Groq models (January 2025)
+Multi-Agent AI System - Streamlit WORKING VERSION
+Fixed async compatibility with LangGraph
 """
 
 import os
@@ -10,12 +10,10 @@ import operator
 from typing import List, Dict, Any, TypedDict, Annotated
 from collections import Counter
 import asyncio
-import nest_asyncio
+import threading
+from queue import Queue
 from dotenv import load_dotenv
 from datetime import datetime
-
-# Apply the patch
-nest_asyncio.apply()
 
 from langchain_core.tools import tool
 from langchain_community.tools.tavily_search import TavilySearchResults
@@ -26,7 +24,7 @@ from langchain_groq import ChatGroq
 
 import streamlit as st
 
-load_dotenv()
+load_dotenv(dotenv_path="C:\AI_PROJECTS\Agentic-AI\.env", override=True)
 
 # --- PAGE CONFIG ---
 st.set_page_config(
@@ -47,13 +45,6 @@ st.markdown("""
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
         padding: 1rem 0;
-    }
-    .agent-card {
-        background-color: #f0f2f6;
-        padding: 1rem;
-        border-radius: 10px;
-        margin: 0.5rem 0;
-        border-left: 4px solid #667eea;
     }
     .thinking-log {
         background-color: #1e1e1e;
@@ -86,7 +77,6 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- SYSTEM PROMPTS ---
-
 CONSENSUS_SYSTEM_PROMPT = """You are part of a multi-agent expert panel. Your role is to provide the most accurate and precise answer possible based ONLY on the provided information.
 EXTRACTION RULES:
 - Parse all relevant data, names, and numbers from the search results.
@@ -105,8 +95,27 @@ Your task is to review the proposed answer based on the original question and th
 
 Respond with 'VALIDATED: [answer]' if it is correct, or 'CORRECTED: [better_answer]' if you can provide a more accurate or concise answer based on the context."""
 
-# --- MODEL MANAGEMENT ---
+# --- ASYNC HELPER FOR STREAMLIT ---
+@st.cache_resource
+def get_event_loop():
+    """Create a dedicated event loop for async operations"""
+    loop = asyncio.new_event_loop()
+    
+    def run_loop_forever(loop_to_run):
+        asyncio.set_event_loop(loop_to_run)
+        loop_to_run.run_forever()
+    
+    t = threading.Thread(target=run_loop_forever, args=(loop,), daemon=True)
+    t.start()
+    return loop
 
+def run_async(coro):
+    """Run async coroutine in Streamlit-compatible way"""
+    loop = get_event_loop()
+    future = asyncio.run_coroutine_threadsafe(coro, loop)
+    return future.result()
+
+# --- MODEL MANAGEMENT ---
 class MultiModelManager:
     """Manages multiple Groq LLM models with current supported models"""
     def __init__(self):
@@ -121,7 +130,6 @@ class MultiModelManager:
             raise RuntimeError("❌ GROQ_API_KEY not found in environment variables")
         
         try:
-            # PRODUCTION MODELS
             self.models['llama3.3_70b'] = ChatGroq(
                 model="llama-3.3-70b-versatile",
                 temperature=0.1,
@@ -140,7 +148,6 @@ class MultiModelManager:
                 api_key=groq_api_key
             )
             
-            # PREVIEW MODELS
             try:
                 self.models['llama4_maverick'] = ChatGroq(
                     model="meta-llama/llama-4-maverick-17b-128e-instruct",
@@ -188,13 +195,11 @@ class MultiModelManager:
         return list(self.models.keys())
 
 # --- SEARCH TOOL ---
-
 @tool
 def enhanced_multi_search(query: str) -> str:
     """Search with Tavily and Wikipedia"""
     all_results = []
     
-    # Tavily Search
     if os.getenv("TAVILY_API_KEY"):
         try:
             search_tool = TavilySearchResults(max_results=3)
@@ -210,18 +215,16 @@ def enhanced_multi_search(query: str) -> str:
                         all_results.append(f"<WebResult>{doc}</WebResult>")
             elif isinstance(results, str):
                 all_results.append(f"<WebResult>{results}</WebResult>")
-                
         except Exception as e:
-            st.warning(f"⚠️ Tavily search error: {e}")
+            pass
     
-    # Wikipedia Search
     try:
         docs = WikipediaLoader(query=query, load_max_docs=1).load()
         for doc in docs:
             content = doc.page_content[:1500]
             title = doc.metadata.get('title', 'Wikipedia')
             all_results.append(f"<WikiResult title='{title}'>{content}</WikiResult>")
-    except Exception as e:
+    except:
         pass
     
     if not all_results:
@@ -230,7 +233,6 @@ def enhanced_multi_search(query: str) -> str:
     return "\n\n---\n\n".join(all_results)
 
 # --- CONSENSUS SYSTEM ---
-
 class ConsensusVotingSystem:
     def __init__(self, model_manager: MultiModelManager):
         self.model_manager = model_manager
@@ -325,7 +327,6 @@ class ConsensusVotingSystem:
             return answer
 
 # --- GRAPH SYSTEM ---
-
 class AgentState(TypedDict):
     query: str
     search_results: str
@@ -361,10 +362,13 @@ class AutonomousLangGraphSystem:
         return {"final_answer": consensus_answer, "thinking_log": log}
     
     def process_query(self, query: str) -> Dict:
+        """FULLY FIXED: Use dedicated event loop in separate thread"""
         initial_state = {"query": query, "thinking_log": []}
         config = {"configurable": {"thread_id": f"agent_{time.time()}"}}
         try:
-            final_state = asyncio.run(self.graph.ainvoke(initial_state, config))
+            # Use the Streamlit-compatible async runner
+            final_state = run_async(self.graph.ainvoke(initial_state, config))
+            
             return {
                 "answer": final_state.get("final_answer", "Processing error"),
                 "thinking_log": final_state.get("thinking_log", [])
@@ -376,7 +380,6 @@ class AutonomousLangGraphSystem:
             }
 
 # --- SESSION STATE INITIALIZATION ---
-
 def init_session_state():
     """Initialize session state variables"""
     if 'messages' not in st.session_state:
@@ -392,29 +395,24 @@ def init_session_state():
         st.session_state.show_thinking = True
 
 # --- STREAMLIT UI ---
-
 def main():
-    # Header
     st.markdown('<h1 class="main-header">🤖 Multi-Agent AI System</h1>', unsafe_allow_html=True)
     st.markdown("### Powered by Groq LLMs with Consensus Voting & Reflection")
     
-    # Initialize session state
     init_session_state()
     
     # Sidebar
     with st.sidebar:
         st.header("⚙️ Settings")
         
-        # Check system status
         if not st.session_state.system_ready:
             st.error("❌ System Error")
             st.error(st.session_state.get('error_message', 'Unknown error'))
-            st.info("💡 Make sure GROQ_API_KEY is set in your .env file")
+            st.info("💡 Make sure GROQ_API_KEY and TAVILY_API_KEY are set in your .env file")
             return
         
         st.success("✅ System Ready")
         
-        # Display available models
         if st.session_state.system:
             model_names = st.session_state.system.model_manager.get_model_names()
             st.info(f"🤖 **Active Models:** {len(model_names)}")
@@ -422,7 +420,6 @@ def main():
                 for model in model_names:
                     st.text(f"• {model}")
         
-        # Settings
         st.session_state.show_thinking = st.checkbox(
             "Show Thinking Process", 
             value=st.session_state.show_thinking,
@@ -431,12 +428,10 @@ def main():
         
         st.divider()
         
-        # Clear chat button
         if st.button("🗑️ Clear Chat History", use_container_width=True):
             st.session_state.messages = []
             st.rerun()
         
-        # Download chat
         if st.session_state.messages:
             chat_export = "\n\n".join([
                 f"{'User' if msg['role'] == 'user' else 'Assistant'}: {msg['content']}"
@@ -452,9 +447,7 @@ def main():
         
         st.divider()
         st.caption("Built with Streamlit + LangGraph")
-        st.caption("Models: Llama 3.3, Llama 4, Qwen 3")
     
-    # Main chat interface
     st.markdown("---")
     
     # Display chat messages
@@ -462,7 +455,6 @@ def main():
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
             
-            # Show thinking log if available
             if message["role"] == "assistant" and "thinking_log" in message and st.session_state.show_thinking:
                 with st.expander("🧠 View Thinking Process"):
                     thinking_html = "<div class='thinking-log'>"
@@ -473,20 +465,16 @@ def main():
     
     # Chat input
     if prompt := st.chat_input("Ask me anything..."):
-        # Add user message
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
             st.markdown(prompt)
         
-        # Process query
         with st.chat_message("assistant"):
             with st.spinner("🤔 Consulting agents..."):
                 result = st.session_state.system.process_query(prompt)
                 
-                # Display answer
                 st.markdown(f'<div class="answer-box">{result["answer"]}</div>', unsafe_allow_html=True)
                 
-                # Display thinking process
                 if st.session_state.show_thinking:
                     with st.expander("🧠 View Thinking Process"):
                         thinking_html = "<div class='thinking-log'>"
@@ -495,29 +483,12 @@ def main():
                         thinking_html += "</div>"
                         st.markdown(thinking_html, unsafe_allow_html=True)
         
-        # Add assistant message
         st.session_state.messages.append({
             "role": "assistant", 
             "content": result["answer"],
             "thinking_log": result["thinking_log"]
         })
-    
-    # Example questions
-    if not st.session_state.messages:
-        st.markdown("### 💡 Try asking:")
-        col1, col2, col3 = st.columns(3)
-        
-        example_questions = [
-            "What is the capital of France?",
-            "Explain quantum computing",
-            "Who won the 2024 Nobel Prize in Physics?"
-        ]
-        
-        for col, question in zip([col1, col2, col3], example_questions):
-            with col:
-                if st.button(question, use_container_width=True):
-                    st.session_state.messages.append({"role": "user", "content": question})
-                    st.rerun()
+
 
 if __name__ == "__main__":
     main()
