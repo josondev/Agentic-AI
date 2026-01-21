@@ -45,14 +45,19 @@ The system follows a structured, graph-based workflow to process each query:
 3.  **Install dependencies:**
     Create a `requirements.txt` file with the following content:
     ```
-    langchain
-    langchain-community
-    langchain-groq
-    langchain-ollama
-    langchain-together
-    python-dotenv
-    tavily-python
-    wikipedia
+      flask==3.0.0
+      gunicorn==21.2.0
+      python-dotenv==1.0.0
+      langchain==0.1.0
+      langchain-core==0.1.10
+      langchain-community==0.0.13
+      langchain-groq==0.0.1
+      langchain-together==0.0.1
+      langchain-ollama==0.0.1
+      langgraph==0.0.20
+      tavily-python==0.3.0
+      wikipedia==1.4.0
+      nest-asyncio==1.5.8
     ```
     Then, install the packages:
     ```
@@ -64,7 +69,7 @@ The system follows a structured, graph-based workflow to process each query:
 The system uses API keys for various services. These should be stored in a `.env` file in the root directory.
 
 1.  Create a file named `.env`.
-2.  Add your API keys to the file. The system is designed to function even if some keys are not provided.
+2.  Add The API keys to the file. The system is designed to function even if some keys are not provided.
 
     ```
     # .env file
@@ -73,12 +78,7 @@ The system uses API keys for various services. These should be stored in a `.env
     TOGETHER_API_KEY="your-together-ai-api-key"
     ```
 
-3.  **(Optional) Local Models with Ollama**: To use local models, ensure you have [Ollama](https://ollama.com/) installed and running. You can pull the required models with the following commands:
-    ```
-    ollama pull llama3
-    ollama pull mistral
-    ollama pull qwen2
-    ```
+
 
 ## How to Run
 
