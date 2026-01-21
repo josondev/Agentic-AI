@@ -2,18 +2,20 @@ services:
   - type: web
     name: agentic-ai-system
     env: python
-    region: Singapore  # Change to your preferred region
-    plan: free      # Options: free, starter, standard
+    region: Singapore
+    plan: free
     branch: main
-    buildCommand: pip install -r requirements.txt
+    # UV-optimized build command (much faster!)
+    buildCommand: |
+      curl -LsSf https://astral.sh/uv/install.sh | sh
+      export PATH="$HOME/.cargo/bin:$PATH"
+      uv pip install --system -r requirements.txt
     startCommand: bash start.sh
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.0
       - key: GROQ_API_KEY
-        sync: false  # Will be set manually in Render dashboard
+        sync: false
       - key: TAVILY_API_KEY
-        sync: false  # Will be set manually in Render dashboard
-      - key: OLLAMA_AVAILABLE
-        value: False
+        sync: false
     healthCheckPath: /health
