@@ -1,4 +1,4 @@
-# Multi-Agent LLM System with Consensus Voting
+   # Multi-Agent LLM Council with Consensus Voting
 
 This project implements a sophisticated multi-agent Large Language Model (LLM) system that leverages the latest research in agentic workflows to achieve high-performance evaluations. It uses a consensus voting mechanism across a diverse panel of LLM agents, followed by a reflection step to ensure answer accuracy and robustness. The entire system is orchestrated using LangGraph.
 
