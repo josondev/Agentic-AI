@@ -45,8 +45,6 @@ The system follows a structured, graph-based workflow to process each query:
 3.  **Install dependencies:**
     Create a `requirements.txt` file with the following content:
     ```
-      flask==3.0.0
-      gunicorn==21.2.0
       python-dotenv==1.0.0
       langchain==0.1.0
       langchain-core==0.1.10
