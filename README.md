@@ -32,8 +32,8 @@ The system follows a structured, graph-based workflow to process each query:
 
 1.  **Clone the repository:**
     ```
-    git clone <your-repository-url>
-    cd <your-repository-directory>
+    git clone https://github.com/josondev/Agentic-AI
+    cd Agentic-AI
     ```
 
 2.  **Create a virtual environment (recommended):**
